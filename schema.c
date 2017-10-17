@@ -899,7 +899,7 @@ int binary_search_int(tbl_p t, int val_to_find, record rec){
 
   
 //b+ low depth, so low amount of reads and seeks 
-
+// seek slower than read 
 
   put_msg(DEBUG, "LEAVING BINARY SEARCH\n");
   
