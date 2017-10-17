@@ -806,18 +806,21 @@ void table_display ( tbl_p t )
   release_record (rec, s);
 }
 
-int binary_search_int(tbl_p t, int offset, int val_to_find){
+int binary_search_int(tbl_p t, int val_to_find, record rec){
 
   put_msg(DEBUG, " Num records: %d\n",t->num_records);        // Number of records in the table 
 
   schema_p s = t->sch;
 
   put_msg(DEBUG, "Record len: %d\n",s->len);                  // Length of each record 
-
-  int num_pages = ((t->num_records * s->len) + (BLOCK_SIZE-1)) / BLOCK_SIZE; // The number of pages the records in the table span 
+  int page_data = 500 - PAGE_HEADER_SIZE;
+  //int num_pages = ((t->num_records * s->len) + (BLOCK_SIZE-1)) / BLOCK_SIZE; // The number of pages the records in the table span 
+  int num_pages = ((t->num_records * s->len) + (page_data-1)) / page_data; // The number of pages the records in the table span 
   if(num_pages < 1){
     num_pages = 1;
   }
+
+  put_msg(DEBUG,"NUM PAGES: %d\n",num_pages);
   put_msg(DEBUG, "Table records span %d pages\n",num_pages);
 
   int page_to_search = num_pages / 2;                       // The page to start searching in. 
@@ -826,41 +829,83 @@ int binary_search_int(tbl_p t, int offset, int val_to_find){
 
   page_p pg = get_page(s->name,page_to_search);             // Fetch the page we want to search. 
   //put_msg(DEBUG, "Page number of searched page %d\n",pg->page_nr);
+  put_msg(DEBUG, "IN BINARY SEARCH\n");
   put_page_info(DEBUG,pg);
-  put_msg(DEBUG, "OHHH");
   put_msg(DEBUG, "Page pos: %d\n",page_current_pos(pg));
   page_set_current_pos(pg,20);
   put_msg(DEBUG, "Page pos: %d\n",page_current_pos(pg));
-  record r = new_record(s);
-  int res = get_page_record(pg,r,s);
-  put_record_info(DEBUG, r, s);                                
+  
+  //int res = get_page_record(pg,r,s);
+  //put_record_info(DEBUG, r, s);                                
   //How to navigate to this page?
 
-
+  //int page_to_search = num_pages / 2;
+  //page_p pg = get_page(s->name,page_to_search);
   //The above fetches first record in the table. 
 
   //So.. to search through our page we set the page pos to 20(which is the start of records)
-  while(1){
-    int page_to_search = num_pages / 2;
+  int pos = 0;
+  int value = 0;
+  int found = 0;
+  //int page_to_search = page_to_search = num_pages / 2;
+  while(!found){   
     page_p pg = get_page(s->name,page_to_search);
-    put_page_info(DEBUG, pg);
-    //Set position to start of page 
-    page_set_current_pos(pg,20);
-    int pos = page_current_pos(pg);
-    record r = new_record(s);
-    int value = page_get_int_at(pg,pos);
-    put_msg(DEBUG, "FOUND VALUE: %d\n",value);
-    if(value != val_to_find){
+    //set start of page 
+    page_set_current_pos(pg,PAGE_HEADER_SIZE);
+    pos = page_current_pos(pg);
+    //Search through the page
+    while(pos != 500){
+      pos = page_current_pos(pg);
+      if(pos == 500){               // If we have read all records in page
+        break;                      // Leave loop 
+      }
+      value = page_get_int_at(pg,pos);
+      //put_msg(DEBUG, "Pos: %d\n",pos);
 
-    }else{
-      //We found what we were searching for 
+      if(value != val_to_find){
+        page_set_current_pos(pg, pos + 24); // Move to next record, 24 = record length 
 
+      }else{
+        put_msg(DEBUG, "Found the wanted value\n");
+        found = 1;
+        page_set_current_pos(pg,pos);
+        get_page_record(pg, rec, s);
+        put_page_info(DEBUG,pg);
+        break;
+      }
     }
-    break;
+    if(pos == 500){                 // This means that the record we want is in a different page 
+      put_msg(DEBUG, "Wanted record is in a different page\n");
+      // find the new page
+      put_msg(DEBUG, "VAL TO FIND: %d\n",val_to_find);
+      put_msg(DEBUG, "VAL FOUND: %d\n",value);
+      if(val_to_find > value){
+        //This means that the last record in the page has a value less than the value we want, so the record is in a higher page
+        //get middle between num_pages / 2 and num_pages 
+        int pages_left  = num_pages - page_to_search - 1;     // Remaining number of pages - the one we just read. 
+        int search_page = (pages_left + (2-1)) / 2;
+        page_to_search = page_to_search + search_page;
+        put_msg(DEBUG, "PAGE TO SEARCH: %d\n",page_to_search);
+      }else if(val_to_find < value){
+        int pages_left = num_pages - page_to_search - 1;
+        int search_page = (pages_left + (2-1)) / 2;
+        page_to_search = page_to_search - search_page;
+        if(page_to_search < 0){
+          page_to_search = 0;
+        }
+        put_msg(DEBUG, "PAGE TO SEARCH: %d\n",page_to_search);
+      }
+      //break;
+    }
+
   }
 
 
+  
 
+
+
+  put_msg(DEBUG, "LEAVING BINARY SEARCH\n");
 
   //put_page_info(DEBUG, t->current_pg);
   //Find the number of records in the table. Can be found with t->num_records
@@ -1005,6 +1050,9 @@ int find_record_less_equal(record rec, schema_p s, int offset, int val){     // 
 tbl_p table_search (tbl_p t, char *attr, char *op, int val)
 {
   if (t == NULL) return NULL;
+
+  int search_binary = 1;  // Set to 0 for linear search or 1 for binary search on equality = 
+
   put_msg(DEBUG, " Number of records in table: %d %d\n",t->num_records,t[4]);
   schema_p s = t->sch;
   field_desc_p f;
@@ -1064,14 +1112,18 @@ tbl_p table_search (tbl_p t, char *attr, char *op, int val)
         append_record(rec, res_sch);
       }
     }
-  }else{
-    binary_search_int(t,f->offset,val);
-    put_page_info(DEBUG, t->current_pg);
-    while ( find_record_int_val (rec, s, f->offset, int_equal, val) ) // Equality search, attr = val
-    {
-      put_page_info(DEBUG, t->current_pg);
-      put_record_info (DEBUG, rec, s);
-      append_record ( rec, res_sch );
+  }else{ 
+    if(search_binary){
+      binary_search_int(t,val,rec);
+      append_record(rec,res_sch);
+    }
+    else{
+      while ( find_record_int_val (rec, s, f->offset, int_equal, val) ) // Equality search, attr = val
+      {
+        put_page_info(DEBUG, t->current_pg);
+        put_record_info (DEBUG, rec, s);
+        append_record ( rec, res_sch );
+      }
     }
   }
 
