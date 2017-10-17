@@ -666,6 +666,7 @@ static int int_equal ( int x, int y )
 int find_record_int_val ( record r, schema_p s, int offset,
 			  int (*op) (int, int), int val)
 {
+  put_record_info(DEBUG, r,s);
   page_p pg = get_page_for_next_record (s);
   if ( pg == NULL ) return 0;
   int pos, rec_val;
@@ -808,106 +809,100 @@ void table_display ( tbl_p t )
 
 int binary_search_int(tbl_p t, int val_to_find, record rec){
 
+  put_msg(DEBUG, "IN BINARY SEARCH\n");
   put_msg(DEBUG, " Num records: %d\n",t->num_records);        // Number of records in the table 
 
-  schema_p s = t->sch;
-
-  put_msg(DEBUG, "Record len: %d\n",s->len);                  // Length of each record 
-  int page_data = 500 - PAGE_HEADER_SIZE;
-  //int num_pages = ((t->num_records * s->len) + (BLOCK_SIZE-1)) / BLOCK_SIZE; // The number of pages the records in the table span 
-  int num_pages = ((t->num_records * s->len) + (page_data-1)) / page_data; // The number of pages the records in the table span 
-  if(num_pages < 1){
+  schema_p s = t->sch;                                        // Fetch schema 
+  put_record_info(DEBUG,rec,s);
+  put_msg(DEBUG, "Record len: %d\n",s->len);                  // s->len =  Length of each record 
+  int page_data = 500 - PAGE_HEADER_SIZE;                     // The real size of a page - the header start of 20 bytes PAGE_HEADER_SIZE
+ 
+  int num_pages = ((t->num_records * s->len) + (page_data-1)) / page_data; // The number of pages the records in the table span, the additional calculations are for solving a num_page result of 3.5. Which should equal to 4 pages.  
+  if(num_pages < 1){    // Cant be a zero page span of records. Must be atleast 1 page. 
     num_pages = 1;
   }
 
   put_msg(DEBUG,"NUM PAGES: %d\n",num_pages);
   put_msg(DEBUG, "Table records span %d pages\n",num_pages);
 
-  int page_to_search = num_pages / 2;                       // The page to start searching in. 
+  int page_to_search = num_pages / 2;                       // The page to start searching in.  
   
   put_msg(DEBUG, "Page to search: %d\n",page_to_search);
 
-  page_p pg = get_page(s->name,page_to_search);             // Fetch the page we want to search. 
-  //put_msg(DEBUG, "Page number of searched page %d\n",pg->page_nr);
-  put_msg(DEBUG, "IN BINARY SEARCH\n");
-  put_page_info(DEBUG,pg);
-  put_msg(DEBUG, "Page pos: %d\n",page_current_pos(pg));
-  page_set_current_pos(pg,20);
-  put_msg(DEBUG, "Page pos: %d\n",page_current_pos(pg));
   
-  //int res = get_page_record(pg,r,s);
-  //put_record_info(DEBUG, r, s);                                
-  //How to navigate to this page?
-
-  //int page_to_search = num_pages / 2;
-  //page_p pg = get_page(s->name,page_to_search);
-  //The above fetches first record in the table. 
-
-  //So.. to search through our page we set the page pos to 20(which is the start of records)
-  int pos = 0;
-  int value = 0;
-  int found = 0;
-  //int page_to_search = page_to_search = num_pages / 2;
+  int pos = 0;                        // Holds current position of the page   
+  int value = 0;                      // Holds the found value 
+  int found = 0;                      // Integer for breaking out of while loop, used as a boolean 
+  int last_searched_page = 0;         // The last page we searched.
+  int same_page_search_count = 0;     // If this is bigger than 1 we are reading the same page over and over, which means the value is not in the database.
+  
   while(!found){   
-    page_p pg = get_page(s->name,page_to_search);
-    //set start of page 
-    page_set_current_pos(pg,PAGE_HEADER_SIZE);
-    pos = page_current_pos(pg);
-    //Search through the page
-    while(pos != 500){
-      pos = page_current_pos(pg);
-      if(pos == 500){               // If we have read all records in page
-        break;                      // Leave loop 
+    page_p pg = get_page(s->name,page_to_search);             // Fetch the page we want to search through 
+    
+    last_searched_page = page_to_search;
+    put_msg(DEBUG, "Page pos: %d\n",page_current_pos(pg));
+    put_page_info(DEBUG,pg);
+    
+    page_set_current_pos(pg,PAGE_HEADER_SIZE);              // Set position to beginning of the page, which is right after the header data, 20
+    pos = page_current_pos(pg);                             // Fetch the current position 
+    
+    //while(pos != 500){                                      // Search through the page until the entire page has been read. 
+      while(eop(pg) != 1){
+      pos = page_current_pos(pg);                           // Fetch position again 
+      if(pos == 500){                                       // If we have read all records in page
+        break;                                              // Leave loop 
       }
-      value = page_get_int_at(pg,pos);
-      //put_msg(DEBUG, "Pos: %d\n",pos);
-
-      if(value != val_to_find){
-        page_set_current_pos(pg, pos + 24); // Move to next record, 24 = record length 
+      value = page_get_int_at(pg,pos);                      // Get the value of the integer 
+       
+      if(value != val_to_find){                             // If the found value is not the one we are looking for 
+        page_set_current_pos(pg, pos + s->len);             // Move to next record, 24 = record length 
 
       }else{
-        put_msg(DEBUG, "Found the wanted value\n");
+        put_msg(DEBUG, "Found the wanted value\n");         // We have found our value 
         found = 1;
-        page_set_current_pos(pg,pos);
-        get_page_record(pg, rec, s);
-        put_page_info(DEBUG,pg);
-        break;
+        page_set_current_pos(pg,pos);                       // Set position 
+        get_page_record(pg, rec, s);                        // fetch the record 
+        put_page_info(DEBUG,pg);                            
+        return 1;                                           // Leave loop 
       }
     }
-    if(pos == 500){                 // This means that the record we want is in a different page 
+    if(pos == 500 || eop(pg) == 1) {                                         // This means that the record we want is in a different page 
       put_msg(DEBUG, "Wanted record is in a different page\n");
-      // find the new page
+      
       put_msg(DEBUG, "VAL TO FIND: %d\n",val_to_find);
       put_msg(DEBUG, "VAL FOUND: %d\n",value);
-      if(val_to_find > value){
-        //This means that the last record in the page has a value less than the value we want, so the record is in a higher page
-        //get middle between num_pages / 2 and num_pages 
+      if(val_to_find > value){                              // If the value we want to find is bigger than the last value of the page we searched, it means that that the value is in a higher page. 
         int pages_left  = num_pages - page_to_search - 1;     // Remaining number of pages - the one we just read. 
-        int search_page = (pages_left + (2-1)) / 2;
-        page_to_search = page_to_search + search_page;
+        int search_page = (pages_left + (2-1)) / 2;           // Finding the numebr of the page we want to search - In relvancy of the initial num_pages. 
+        page_to_search = page_to_search + search_page;        // Calculating the page we want to search 
         put_msg(DEBUG, "PAGE TO SEARCH: %d\n",page_to_search);
-      }else if(val_to_find < value){
-        int pages_left = num_pages - page_to_search - 1;
+      }else if(val_to_find < value){                          // If the value we want is smaller than the last value of the page we searched, it means that the value is in a lower page. 
+        int pages_left = num_pages - page_to_search - 1;      // Do the same as above, we calculate which page we want to search through. 
         int search_page = (pages_left + (2-1)) / 2;
         page_to_search = page_to_search - search_page;
-        if(page_to_search < 0){
+        if(page_to_search < 0){                               // If for some reason the calculation bugs out and sets a negative page number, we simply set the page to page 0. 
           page_to_search = 0;
         }
-        put_msg(DEBUG, "PAGE TO SEARCH: %d\n",page_to_search);
-      }
-      //break;
-    }
 
+        put_msg(DEBUG, "PAGE TO SEARCH: %d\n",page_to_search);
+      } 
+
+        if(page_to_search == last_searched_page){
+          put_msg(DEBUG, "VALUE NOT IN DATABSE\n");
+          put_page_info(DEBUG,pg);
+          put_record_info(DEBUG,rec,s);
+          break;
+        }
+    }
   }
 
 
   
-
+//b+ low depth, so low amount of reads and seeks 
 
 
   put_msg(DEBUG, "LEAVING BINARY SEARCH\n");
-
-  //put_page_info(DEBUG, t->current_pg);
+  
   //Find the number of records in the table. Can be found with t->num_records
   // Binary search goes to the middle and compares the value there. 
   // So find the record at t->num_records / 2.
@@ -919,133 +914,89 @@ int binary_search_int(tbl_p t, int val_to_find, record rec){
   // This search should only work on equality search, so it only finds 1 record for us. ie. Select * from users where id = 5
   // Will only return the record where the id is equal to 5. Nothing else. 
 
-  // Worst case is desired value and the end of beggining of the table. Best case middle (only 1 search needed).
-
+  // Worst case is desired value located at the end or begining of the table. Best case middle (only 1 search needed).
+  // one optimization we can do for searches on value 0, should always be in page 0, so we can instantly read page 0 at location 20, PAGE_HEADER_SIZE
   // In a table with 500 records :
-  // Search 1: 250 records to search through. 
-  // Search 2: 125 records to search through.
-  // Search 3:  63 records to search through.
-  // Search 4:  32 records to search through.
-  // Search 5:  16 records to search through.
-  // Serach 6:   8 records to search through.
-  // Search 7:   4 records to search through.
-  // Search 8:   2 records to search through.
-  // Search 9:   1 records to search through.
+  // Search 1: 250 records remaining. 
+  // Search 2: 125 records remaining.
+  // Search 3:  63 records remaining.
+  // Search 4:  32 records remaining.
+  // Search 5:  16 records remaining.
+  // Serach 6:   8 records remaining.
+  // Search 7:   4 records remaining.
+  // Search 8:   2 records remaining.
+  // Search 9:   1 records remaining.
 
-  // A linear search would have to go through all 500 records if the desired one is the last one.  
+  // A linear search would have to go through all 500 records if the desired one is the last one. But has a best case where desired value is at location 0. 
 
   return 0;
 }
 
-int find_record_not_equal(record rec, schema_p s, int offset, int val){     // This is used for '!=' ops, lets find all records, not inculding the val specified
-  page_p pg = get_page_for_next_record(s);      
+int find_record_all(record rec, schema_p s, int offset, int val, const char* op){
+    page_p pg = get_page_for_next_record(s);      
   if(pg == NULL){
     return 0;
   }
+
+  const char* t_lessEqual   = "<=";
+  const char* t_biggerEqual = ">=";
+  const char* t_less        = "<";
+  const char* t_bigger      = ">";
+  const char* t_notEqual    = "!=";
 
   int pos, rec_val;
   for( ; pg != NULL; pg = get_page_for_next_record(s) ){ // Loop through each record 
     pos = page_current_pos(pg);                           // Get position
     rec_val = page_get_int_at(pg, pos + offset);          // Get value 
 
-    if(val != rec_val){                                   // If the found value is not equal to the value specified, we add it 
-      page_set_current_pos(pg, pos);                      // Move position 
-      get_page_record(pg, rec, s);                        // Get the record 
-      return 1;                                           // Return 
-    }else{
-      page_set_current_pos(pg, pos + s->len);             
+    if(strcmp(op,t_notEqual) == 0){
+      if(val != rec_val){                                   // If the found value is not equal to the value specified, we add it 
+        page_set_current_pos(pg, pos);                      // Move position 
+        get_page_record(pg, rec, s);                        // Get the record 
+        return 1;                                           // Return 
+      }else{
+        page_set_current_pos(pg, pos + s->len);             
+      }
+    }else if(strcmp(op,t_bigger) == 0){
+      if(val < rec_val){                                    // If the found value is not equal to the value specified, we add it 
+        page_set_current_pos(pg, pos);                      // Move position 
+        get_page_record(pg, rec, s);                        // Get the record 
+        return 1;                                           // Return 
+      }else{
+        page_set_current_pos(pg, pos + s->len);             
+      }
+    }else if(strcmp(op,t_less) == 0){
+      if(val > rec_val){                                   // If the found value is not equal to the value specified, we add it 
+        page_set_current_pos(pg, pos);                      // Move position 
+        get_page_record(pg, rec, s);                        // Get the record 
+        return 1;                                           // Return 
+      }else{
+        page_set_current_pos(pg, pos + s->len);             
+      }
+    }else if(strcmp(op,t_biggerEqual) == 0){
+      if(val <= rec_val){                                   // If the found value is not equal to the value specified, we add it 
+        page_set_current_pos(pg, pos);                      // Move position 
+        get_page_record(pg, rec, s);                        // Get the record 
+        return 1;                                           // Return 
+      }else{
+        page_set_current_pos(pg, pos + s->len);             
+      }
+    }else if(strcmp(op,t_lessEqual) == 0){
+      if(val >= rec_val){                                   // If the found value is not equal to the value specified, we add it 
+        page_set_current_pos(pg, pos);                      // Move position 
+        get_page_record(pg, rec, s);                        // Get the record 
+        return 1;                                           // Return 
+      }else{
+        page_set_current_pos(pg, pos + s->len);             
+      }
     }
+    
   }
   return 0;
 }
 
-int find_record_greater(record rec, schema_p s, int offset, int val){     // This is used for '!=' ops, lets find all records, not inculding the val specified
-  page_p pg = get_page_for_next_record(s);      
-  if(pg == NULL){
-    return 0;
-  }
 
-  int pos, rec_val;
-  for( ; pg != NULL; pg = get_page_for_next_record(s) ){ // Loop through each record 
-    pos = page_current_pos(pg);                           // Get position
-    rec_val = page_get_int_at(pg, pos + offset);          // Get value 
 
-    if(val < rec_val){                                   // If the found value is not equal to the value specified, we add it 
-      page_set_current_pos(pg, pos);                      // Move position 
-      get_page_record(pg, rec, s);                        // Get the record 
-      return 1;                                           // Return 
-    }else{
-      page_set_current_pos(pg, pos + s->len);             
-    }
-  }
-  return 0;
-}
-
-int find_record_less(record rec, schema_p s, int offset, int val){     // This is used for '!=' ops, lets find all records, not inculding the val specified
-  page_p pg = get_page_for_next_record(s);      
-  if(pg == NULL){
-    return 0;
-  }
-
-  int pos, rec_val;
-  for( ; pg != NULL; pg = get_page_for_next_record(s) ){ // Loop through each record 
-    pos = page_current_pos(pg);                           // Get position
-    rec_val = page_get_int_at(pg, pos + offset);          // Get value 
-
-    if(val > rec_val){                                   // If the found value is not equal to the value specified, we add it 
-      page_set_current_pos(pg, pos);                      // Move position 
-      get_page_record(pg, rec, s);                        // Get the record 
-      return 1;                                           // Return 
-    }else{
-      page_set_current_pos(pg, pos + s->len);             
-    }
-  }
-  return 0;
-}
-
-int find_record_greater_equal(record rec, schema_p s, int offset, int val){     // This is used for '!=' ops, lets find all records, not inculding the val specified
-  page_p pg = get_page_for_next_record(s);      
-  if(pg == NULL){
-    return 0;
-  }
-
-  int pos, rec_val;
-  for( ; pg != NULL; pg = get_page_for_next_record(s) ){ // Loop through each record 
-    pos = page_current_pos(pg);                           // Get position
-    rec_val = page_get_int_at(pg, pos + offset);          // Get value 
-
-    if(val <= rec_val){                                   // If the found value is not equal to the value specified, we add it 
-      page_set_current_pos(pg, pos);                      // Move position 
-      get_page_record(pg, rec, s);                        // Get the record 
-      return 1;                                           // Return 
-    }else{
-      page_set_current_pos(pg, pos + s->len);             
-    }
-  }
-  return 0;
-}
-
-int find_record_less_equal(record rec, schema_p s, int offset, int val){     // This is used for '!=' ops, lets find all records, not inculding the val specified
-  page_p pg = get_page_for_next_record(s);      
-  if(pg == NULL){
-    return 0;
-  }
-
-  int pos, rec_val;
-  for( ; pg != NULL; pg = get_page_for_next_record(s) ){ // Loop through each record 
-    pos = page_current_pos(pg);                           // Get position
-    rec_val = page_get_int_at(pg, pos + offset);          // Get value 
-
-    if(rec_val <= val){                                   // If the found value is not equal to the value specified, we add it 
-      page_set_current_pos(pg, pos);                      // Move position 
-      get_page_record(pg, rec, s);                        // Get the record 
-      return 1;                                           // Return 
-    }else{
-      page_set_current_pos(pg, pos + s->len);             
-    }
-  }
-  return 0;
-}
 
 tbl_p table_search (tbl_p t, char *attr, char *op, int val)
 {
@@ -1069,7 +1020,7 @@ tbl_p table_search (tbl_p t, char *attr, char *op, int val)
       }
   if ( f == NULL ) return NULL;
 
-  char tmp_name[30] = "tmp_tbl__";
+  char tmp_name[30] = "tmp_tbl__";  
   strcat (tmp_name, s->name);
   schema_p res_sch = copy_schema ( s, tmp_name );
   record rec = new_record ( s );
@@ -1078,48 +1029,25 @@ tbl_p table_search (tbl_p t, char *attr, char *op, int val)
   // Check the op for <,<=, >, >=, != , if so we call our own function
   if(op[0] == '<' || op[0] == '>' || op[0] == '!'){ // The op contains atleast <, > or ! 
     put_msg(DEBUG," <, >, or ! operator\n");
-    //Define the op and do the correct search
-    const char* t_lessEqual   = "<=";
-    const char* t_biggerEqual = ">=";
-    const char* t_less        = "<";
-    const char* t_bigger      = ">";
-    const char* t_notEqual    = "!=";
     put_msg(DEBUG, "%s\n", op);
     
-    if(strcmp(op,t_notEqual) == 0){                                   // Not equal search, attr != val
-      while(find_record_not_equal(rec, s, f->offset, val)){
-        put_record_info(DEBUG, rec, s);
-        append_record(rec, res_sch);
-      }
-    }else if(strcmp(op, t_bigger) == 0){                              // Bigger than search, attr > val 
-      while(find_record_greater(rec, s, f->offset, val)){
-        put_record_info(DEBUG, rec, s);
-        append_record(rec, res_sch);
-      }
-    }else if(strcmp(op, t_less) == 0){                                // Less than search, attr < val
-      while(find_record_less(rec, s, f->offset, val)){
-        put_record_info(DEBUG, rec, s);
-        append_record(rec, res_sch);
-      }
-    }else if(strcmp(op, t_lessEqual) == 0){                           // Less than or equal, attr <= val 
-      while(find_record_less_equal(rec, s, f->offset, val)){
-        put_record_info(DEBUG, rec, s);
-        append_record(rec, res_sch);
-      }
-    }else if(strcmp(op, t_biggerEqual) == 0){                         // Bigger than or equal, attr >= val
-      while(find_record_greater_equal(rec, s, f->offset, val)){
-        put_record_info(DEBUG, rec, s);
-        append_record(rec, res_sch);
-      }
+                                     
+    while(find_record_all(rec,s,f->offset,val,op)){ // For operators not '='
+       put_record_info(DEBUG,rec,s);
+       append_record(rec, res_sch);
     }
   }else{ 
-    if(search_binary){
-      binary_search_int(t,val,rec);
-      append_record(rec,res_sch);
+    if(search_binary){                        // If we want a binary search do it 
+      int res = binary_search_int(t,val,rec);
+      if(res){
+        put_record_info(DEBUG,rec,s);
+        append_record(rec,res_sch);
+      }      
     }
-    else{
+    else{                                     // For linear search 
+
       while ( find_record_int_val (rec, s, f->offset, int_equal, val) ) // Equality search, attr = val
-      {
+      { 
         put_page_info(DEBUG, t->current_pg);
         put_record_info (DEBUG, rec, s);
         append_record ( rec, res_sch );
