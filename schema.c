@@ -808,7 +808,12 @@ void table_display ( tbl_p t )
 }
 
 int binary_search_int(tbl_p t, int val_to_find, record rec){
+  //page_p ok = pages[0];
+  //put_msg(DEBUG, "Numb blocks %d\n",file_num_blocks(t->sch->name));
+  //put_msg(DEBUG, "PAGES[0]");
 
+  //put_page_info(DEBUG,ok);
+  //return 0;
   put_msg(DEBUG, "IN BINARY SEARCH\n");
   put_msg(DEBUG, " Num records: %d\n",t->num_records);        // Number of records in the table 
 
@@ -821,7 +826,8 @@ int binary_search_int(tbl_p t, int val_to_find, record rec){
   if(num_pages < 1){    // Cant be a zero page span of records. Must be atleast 1 page. 
     num_pages = 1;
   }
-
+  num_pages = file_num_blocks(s->name);
+  int max_pages = file_num_blocks(s->name);
   put_msg(DEBUG,"NUM PAGES: %d\n",num_pages);
   put_msg(DEBUG, "Table records span %d pages\n",num_pages);
 
@@ -836,9 +842,9 @@ int binary_search_int(tbl_p t, int val_to_find, record rec){
   int last_searched_page = 0;         // The last page we searched.
   int same_page_search_count = 0;     // If this is bigger than 1 we are reading the same page over and over, which means the value is not in the database.
   
-  while(!found){   
-    page_p pg = get_page(s->name,page_to_search);             // Fetch the page we want to search through 
-    
+  while(!found){
+    //page_p pg = get_page(s->name,page_to_search);             // Fetch the page we want to search through 
+    page_p pg = get_page(s->name,page_to_search);
     last_searched_page = page_to_search;
     put_msg(DEBUG, "Page pos: %d\n",page_current_pos(pg));
     put_page_info(DEBUG,pg);
@@ -872,14 +878,24 @@ int binary_search_int(tbl_p t, int val_to_find, record rec){
       put_msg(DEBUG, "VAL TO FIND: %d\n",val_to_find);
       put_msg(DEBUG, "VAL FOUND: %d\n",value);
       if(val_to_find > value){                              // If the value we want to find is bigger than the last value of the page we searched, it means that that the value is in a higher page. 
-        int pages_left  = num_pages - page_to_search - 1;     // Remaining number of pages - the one we just read. 
+        int pages_left  = num_pages - page_to_search;     // Remaining number of pages - the one we just read. 
         int search_page = (pages_left + (2-1)) / 2;           // Finding the numebr of the page we want to search - In relvancy of the initial num_pages. 
         page_to_search = page_to_search + search_page;        // Calculating the page we want to search 
+
+        put_msg(DEBUG, "Pages left: %d\n",pages_left);
+        put_msg(DEBUG, "Serach_page: %d\n",search_page);        
         put_msg(DEBUG, "PAGE TO SEARCH: %d\n",page_to_search);
       }else if(val_to_find < value){                          // If the value we want is smaller than the last value of the page we searched, it means that the value is in a lower page. 
-        int pages_left = num_pages - page_to_search - 1;      // Do the same as above, we calculate which page we want to search through. 
+        //int pages_left = num_pages - page_to_search - 1;      // Do the same as above, we calculate which page we want to search through. 
+        int pages_left = page_to_search - 1;
         int search_page = (pages_left + (2-1)) / 2;
-        page_to_search = page_to_search - search_page;
+        num_pages = pages_left;
+        put_msg(DEBUG, "Pages left: %d\n",pages_left);
+        put_msg(DEBUG, "Serach_page: %d\n",search_page);
+        put_msg(DEBUG, "PRE page_to_search %d\n",page_to_search);
+        //page_to_search = page_to_search - search_page; // This might be wrong 
+        page_to_search = search_page;
+        put_msg(DEBUG, "page_to_search %d\n",page_to_search);
         if(page_to_search < 0){                               // If for some reason the calculation bugs out and sets a negative page number, we simply set the page to page 0. 
           page_to_search = 0;
         }
@@ -890,7 +906,7 @@ int binary_search_int(tbl_p t, int val_to_find, record rec){
         if(page_to_search == last_searched_page){
           put_msg(DEBUG, "VALUE NOT IN DATABSE\n");
           put_page_info(DEBUG,pg);
-          put_record_info(DEBUG,rec,s);
+          
           break;
         }
     }
@@ -903,31 +919,6 @@ int binary_search_int(tbl_p t, int val_to_find, record rec){
 
   put_msg(DEBUG, "LEAVING BINARY SEARCH\n");
   
-  //Find the number of records in the table. Can be found with t->num_records
-  // Binary search goes to the middle and compares the value there. 
-  // So find the record at t->num_records / 2.
-  // If the found value is less than the desired. We take a new middle between num_records /2 and num_records.
-  // If found values is bigger than the desired. We take a new middle between (num_records / 2) / 2
-  // And so on. 
-  // Every record is sorted on an integer field type, going from lowest to highest. For instance a "customer_id" in a customer table.
-
-  // This search should only work on equality search, so it only finds 1 record for us. ie. Select * from users where id = 5
-  // Will only return the record where the id is equal to 5. Nothing else. 
-
-  // Worst case is desired value located at the end or begining of the table. Best case middle (only 1 search needed).
-  // one optimization we can do for searches on value 0, should always be in page 0, so we can instantly read page 0 at location 20, PAGE_HEADER_SIZE
-  // In a table with 500 records :
-  // Search 1: 250 records remaining. 
-  // Search 2: 125 records remaining.
-  // Search 3:  63 records remaining.
-  // Search 4:  32 records remaining.
-  // Search 5:  16 records remaining.
-  // Serach 6:   8 records remaining.
-  // Search 7:   4 records remaining.
-  // Search 8:   2 records remaining.
-  // Search 9:   1 records remaining.
-
-  // A linear search would have to go through all 500 records if the desired one is the last one. But has a best case where desired value is at location 0. 
 
   return 0;
 }
@@ -961,6 +952,7 @@ int find_record_all(record rec, schema_p s, int offset, int val, const char* op)
       if(val < rec_val){                                    // If the found value is not equal to the value specified, we add it 
         page_set_current_pos(pg, pos);                      // Move position 
         get_page_record(pg, rec, s);                        // Get the record 
+        put_page_info(DEBUG,pg);
         return 1;                                           // Return 
       }else{
         page_set_current_pos(pg, pos + s->len);             
@@ -1040,6 +1032,7 @@ tbl_p table_search (tbl_p t, char *attr, char *op, int val)
     if(search_binary){                        // If we want a binary search do it 
       int res = binary_search_int(t,val,rec);
       if(res){
+        put_pager_profiler_info(DEBUG);
         put_record_info(DEBUG,rec,s);
         append_record(rec,res_sch);
       }      
@@ -1051,7 +1044,9 @@ tbl_p table_search (tbl_p t, char *attr, char *op, int val)
         put_page_info(DEBUG, t->current_pg);
         put_record_info (DEBUG, rec, s);
         append_record ( rec, res_sch );
+        //put_pager_profiler_info(DEBUG);
       }
+      
     }
   }
 
